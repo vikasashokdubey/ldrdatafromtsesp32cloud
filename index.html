@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global IoT Telemetry Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f6;
+            color: #333;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+        }
+        .live-value-card {
+            background: #eafaf1;
+            border: 2px solid #2ecc71;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px auto;
+            max-width: 300px;
+        }
+        .live-value {
+            font-size: 48px;
+            font-weight: bold;
+            color: #27ae60;
+            margin: 10px 0;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+            width: 100%;
+            margin-top: 30px;
+        }
+        .status {
+            font-size: 14px;
+            color: #7f8c8d;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>🌍 Global IoT Telemetry</h1>
+        <p>Live LDR Light Sensor Data from the Edge</p>
+
+        <div class="live-value-card">
+            <h3>Current Light Level</h3>
+            <div class="live-value" id="currentValue">--</div>
+            <div class="status" id="lastUpdateTime">Waiting for data...</div>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="iotChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // CONFIGURATION: ADD YOUR THINGSPEAK DETAILS
+        // ==========================================
+        const channelID = '3412442'; 
+        const readAPIKey = '2L337JEXSVXB2L8Z';
+        
+        // Fetch the last 15 data points
+        const url = `https://api.thingspeak.com/channels/${channelID}/fields/1.json?api_key=${readAPIKey}&results=15`;
+
+        // Initialize Chart.js configuration
+        const ctx = document.getElementById('iotChart').getContext('2d');
+        const iotChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], // Time stamps go here
+                datasets: [{
+                    label: 'Light Intensity (ADC Value)',
+                    data: [], // Sensor values go here
+                    borderColor: '#3498db',
+                    backgroundColor: 'rgba(52, 152, 219, 0.2)',
+                    borderWidth: 2,
+                    pointBackgroundColor: '#2980b9',
+                    fill: true,
+                    tension: 0.3 // Adds a slight curve to the line
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 4095 // Maximum value for ESP32 12-bit ADC
+                    }
+                },
+                animation: {
+                    duration: 0 // Disable animation for smoother live updates
+                }
+            }
+        });
+
+        // Function to fetch data and update the UI
+        async function fetchThingSpeakData() {
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+
+                // Extract the feeds array from the JSON response
+                const feeds = data.feeds;
+
+                if (feeds.length > 0) {
+                    // Get the most recent reading (the last item in the array)
+                    const latestReading = feeds[feeds.length - 1];
+                    const latestValue = latestReading.field1;
+                    
+                    // Format the timestamp for local viewing
+                    const timestamp = new Date(latestReading.created_at).toLocaleTimeString();
+
+                    // Update the large Number Card
+                    document.getElementById('currentValue').innerText = latestValue;
+                    document.getElementById('lastUpdateTime').innerText = "Last updated: " + timestamp;
+
+                    // Parse the array for the Chart
+                    const chartLabels = feeds.map(feed => new Date(feed.created_at).toLocaleTimeString());
+                    const chartData = feeds.map(feed => feed.field1);
+
+                    // Inject new data into the chart and redraw
+                    iotChart.data.labels = chartLabels;
+                    iotChart.data.datasets[0].data = chartData;
+                    iotChart.update();
+                }
+            } catch (error) {
+                console.error("Error fetching data: ", error);
+                document.getElementById('lastUpdateTime').innerText = "Connection error. Retrying...";
+            }
+        }
+
+        // Fetch immediately on load
+        fetchThingSpeakData();
+
+        // Refresh the data every 15 seconds (15000 milliseconds)
+        setInterval(fetchThingSpeakData, 15000);
+
+    </script>
+</body>
+</html>
