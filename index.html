@@ -3,156 +3,116 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Global IoT Telemetry Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <title>Global IoT Real-Time Terminal</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f4f7f6;
-            color: #333;
-            text-align: center;
-            margin: 0;
-            padding: 20px;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #2c3e50;
-        }
-        .live-value-card {
-            background: #eafaf1;
-            border: 2px solid #2ecc71;
-            border-radius: 8px;
-            padding: 20px;
-            margin: 20px auto;
-            max-width: 300px;
-        }
-        .live-value {
-            font-size: 48px;
-            font-weight: bold;
-            color: #27ae60;
-            margin: 10px 0;
-        }
-        .chart-container {
-            position: relative;
-            height: 400px;
-            width: 100%;
-            margin-top: 30px;
-        }
-        .status {
-            font-size: 14px;
-            color: #7f8c8d;
-            margin-top: 10px;
-        }
+        body { font-family: 'Courier New', Courier, monospace; background-color: #1e1e1e; color: #d4d4d4; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .terminal-container { width: 100%; max-width: 800px; background: #252526; border: 1px solid #3c3c3c; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); overflow: hidden; }
+        .header { background: #333333; padding: 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e1e1e; }
+        .status-box { display: flex; align-items: center; gap: 10px; font-weight: bold; }
+        .pulse { width: 12px; height: 12px; background-color: #f44336; border-radius: 50%; box-shadow: 0 0 10px #f44336; }
+        .connected .pulse { background-color: #4caf50; box-shadow: 0 0 15px #4caf50; animation: pulse-animation 1.5s infinite; }
+        @keyframes pulse-animation { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+        .chat-box { height: 400px; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 10px; }
+        .msg { padding: 10px 15px; border-radius: 5px; max-width: 80%; word-wrap: break-word; }
+        .msg-web { background: #0e639c; align-self: flex-end; color: white; }
+        .msg-esp { background: #3c3c3c; align-self: flex-start; border-left: 4px solid #4caf50; }
+        .time { font-size: 0.75em; opacity: 0.7; margin-bottom: 5px; display: block; }
+        .input-area { display: flex; padding: 15px; background: #2d2d2d; border-top: 1px solid #3c3c3c; }
+        input[type="text"] { flex: 1; padding: 12px; background: #1e1e1e; border: 1px solid #3c3c3c; color: white; border-radius: 4px; font-family: inherit; font-size: 16px; outline: none; }
+        input[type="text"]:focus { border-color: #0e639c; }
+        button { padding: 0 25px; margin-left: 10px; background: #0e639c; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        button:hover { background: #1177bb; }
+        button:disabled { background: #555; cursor: not-allowed; }
     </style>
 </head>
 <body>
 
-    <div class="container">
-        <h1>🌍 Global IoT Telemetry</h1>
-        <p>Live LDR Light Sensor Data from the Edge</p>
-
-        <div class="live-value-card">
-            <h3>Current Light Level</h3>
-            <div class="live-value" id="currentValue">--</div>
-            <div class="status" id="lastUpdateTime">Waiting for data...</div>
+    <div class="terminal-container">
+        <div class="header">
+            <div>📡 IPCS Global MQTT Bridge</div>
+            <div class="status-box" id="statusBox">
+                <div class="pulse"></div>
+                <span id="statusText">Connecting to Broker...</span>
+            </div>
         </div>
+        
+        <div class="chat-box" id="chatBox">
+            </div>
 
-        <div class="chart-container">
-            <canvas id="iotChart"></canvas>
+        <div class="input-area">
+            <input type="text" id="messageInput" placeholder="Type command for ESP32..." disabled>
+            <button id="sendBtn" disabled>SEND TX</button>
         </div>
     </div>
 
     <script>
-        // ==========================================
-        // CONFIGURATION: ADD YOUR THINGSPEAK DETAILS
-        // ==========================================
-        const channelID = '3412442'; 
-        const readAPIKey = '2L337JEXSVXB2L8Z';
+        // Use HiveMQ's Public WebSocket Broker for Global Real-Time connection
+        const brokerUrl = 'wss://broker.hivemq.com:8000/mqtt';
         
-        // Fetch the last 15 data points
-        const url = `https://api.thingspeak.com/channels/${channelID}/fields/1.json?api_key=${readAPIKey}&results=15`;
+        // Define unique topics for bidirectional flow
+        const TOPIC_WEB_TO_ESP = "ipcs/vikas/web_tx";
+        const TOPIC_ESP_TO_WEB = "ipcs/vikas/esp_tx";
 
-        // Initialize Chart.js configuration
-        const ctx = document.getElementById('iotChart').getContext('2d');
-        const iotChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: [], // Time stamps go here
-                datasets: [{
-                    label: 'Light Intensity (ADC Value)',
-                    data: [], // Sensor values go here
-                    borderColor: '#3498db',
-                    backgroundColor: 'rgba(52, 152, 219, 0.2)',
-                    borderWidth: 2,
-                    pointBackgroundColor: '#2980b9',
-                    fill: true,
-                    tension: 0.3 // Adds a slight curve to the line
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        max: 4095 // Maximum value for ESP32 12-bit ADC
-                    }
-                },
-                animation: {
-                    duration: 0 // Disable animation for smoother live updates
-                }
+        // Connect to the broker
+        const client = mqtt.connect(brokerUrl);
+
+        const statusBox = document.getElementById('statusBox');
+        const statusText = document.getElementById('statusText');
+        const chatBox = document.getElementById('chatBox');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        // Event: When successfully connected to the global cloud
+        client.on('connect', () => {
+            statusBox.classList.add('connected');
+            statusText.innerText = "Broker Live (0ms latency)";
+            messageInput.disabled = false;
+            sendBtn.disabled = false;
+            
+            // Subscribe to listen to the ESP32
+            client.subscribe(TOPIC_ESP_TO_WEB);
+            appendMessage("SYSTEM", "Connected to Global MQTT Broker. Waiting for ESP32 sync...", "msg-esp");
+        });
+
+        // Event: When a message arrives from the ESP32
+        client.on('message', (topic, message) => {
+            if (topic === TOPIC_ESP_TO_WEB) {
+                appendMessage("ESP32 Hardware", message.toString(), "msg-esp");
             }
         });
 
-        // Function to fetch data and update the UI
-        async function fetchThingSpeakData() {
-            try {
-                const response = await fetch(url);
-                const data = await response.json();
+        // Function to send data to the ESP32
+        function sendMessage() {
+            const msg = messageInput.value.trim();
+            if (msg === "") return;
 
-                // Extract the feeds array from the JSON response
-                const feeds = data.feeds;
-
-                if (feeds.length > 0) {
-                    // Get the most recent reading (the last item in the array)
-                    const latestReading = feeds[feeds.length - 1];
-                    const latestValue = latestReading.field1;
-                    
-                    // Format the timestamp for local viewing
-                    const timestamp = new Date(latestReading.created_at).toLocaleTimeString();
-
-                    // Update the large Number Card
-                    document.getElementById('currentValue').innerText = latestValue;
-                    document.getElementById('lastUpdateTime').innerText = "Last updated: " + timestamp;
-
-                    // Parse the array for the Chart
-                    const chartLabels = feeds.map(feed => new Date(feed.created_at).toLocaleTimeString());
-                    const chartData = feeds.map(feed => feed.field1);
-
-                    // Inject new data into the chart and redraw
-                    iotChart.data.labels = chartLabels;
-                    iotChart.data.datasets[0].data = chartData;
-                    iotChart.update();
-                }
-            } catch (error) {
-                console.error("Error fetching data: ", error);
-                document.getElementById('lastUpdateTime').innerText = "Connection error. Retrying...";
-            }
+            // Publish message to the cloud
+            client.publish(TOPIC_WEB_TO_ESP, msg);
+            
+            // Update UI
+            appendMessage("Web UI", msg, "msg-web");
+            messageInput.value = '';
         }
 
-        // Fetch immediately on load
-        fetchThingSpeakData();
+        // UI Function to add chat bubbles
+        function appendMessage(sender, text, className) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `msg ${className}`;
+            
+            const now = new Date();
+            const timeStr = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
+            
+            msgDiv.innerHTML = `<span class="time">[${timeStr}] ${sender}</span>${text}`;
+            chatBox.appendChild(msgDiv);
+            chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to bottom
+        }
 
-        // Refresh the data every 15 seconds (15000 milliseconds)
-        setInterval(fetchThingSpeakData, 15000);
-
+        // Event listeners for sending
+        sendBtn.addEventListener('click', sendMessage);
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
     </script>
 </body>
 </html>
